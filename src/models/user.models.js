@@ -1,7 +1,7 @@
-import mongoose, { Scheme } from "mongoose";
+import mongoose, { Schema } from "mongoose";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-const userScheme = new Scheme(
+const userSchema = new Schema(
   {
     username: {
       type: String,
@@ -38,7 +38,7 @@ const userScheme = new Scheme(
 
     watchHistory: [
       {
-        type: Scheme.Types.ObjectId,
+        type: Schema.Types.ObjectId,
         ref: "Video",
       },
     ],
@@ -61,17 +61,17 @@ Schema->pre() method is used here
 
 */
 
-userScheme.pre("save", async function (next) {
-  if (!this.modified("password")) return next();
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) return next();
   this.password = bcrypt.hash(this.password, 10);
 });
 
 /* Using schema methods to check / compare password */
-userScheme.methods.isPasswordCorrect = async function (password) {
+userSchema.methods.isPasswordCorrect = async function (password) {
   return await bcrypt.compare(password, this.password);
 };
 
-userScheme.methods.generateAccessToken = async function () {
+userSchema.methods.generateAccessToken = async function () {
   //shortlived access token
   jwt.sign(
     {
@@ -84,7 +84,7 @@ userScheme.methods.generateAccessToken = async function () {
     { expiresIn: process.env.ACCESS_TOKEN_EXPIRY }
   );
 };
-userScheme.methods.generateRefreshToken = async function () {
+userSchema.methods.generateRefreshToken = async function () {
   //shortlived access token
   jwt.sign(
     {
@@ -95,4 +95,4 @@ userScheme.methods.generateRefreshToken = async function () {
   );
 };
 
-export const User = mongoose.model("User", userScheme);
+export const User = mongoose.model("User", userSchema);
