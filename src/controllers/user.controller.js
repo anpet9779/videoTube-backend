@@ -6,6 +6,26 @@ import {
   deleteFromCloudinary,
 } from "../utils/cloudinary.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
+import jwt from "jsonwebtoken";
+import { httpOptions } from "../utils/httpOptions.js";
+
+const generateAccessAndRefreshToken = async (userId) => {
+  try {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, "User not found!");
+    }
+
+    const userAccessToken = user.generateAccessToken();
+    const userRefreshToken = user.generateRefreshToken();
+
+    user.refreshToken = userRefreshToken;
+    await user.save({ validateBeforeSave: false });
+    return { userAccessToken, userRefreshToken };
+  } catch (error) {
+    throw new ApiError(500, "failed generating tokens");
+  }
+};
 
 const registerUser = asyncHandler(async (req, res) => {
   const { fullname, email, username, password } = req.body;
@@ -99,4 +119,132 @@ const registerUser = asyncHandler(async (req, res) => {
   }
 });
 
-export { registerUser };
+const loginUser = asyncHandler(async (req, res) => {
+  //get data from body
+  const { email, username, password } = req.body;
+
+  //validation
+  if (!email) {
+    console.log(email);
+    throw new ApiError(400, "Email is required");
+  }
+
+  //Check if user exist
+  const user = await User.findOne({
+    $or: [{ username }, { email }],
+  });
+
+  if (!user) {
+    throw new ApiError(404, "User not found!");
+  }
+
+  //validate password
+  const isPasswordValid = await user.isPasswordCorrect(password);
+
+  if (!isPasswordValid) {
+    throw new ApiError(401, "Invalid Credentials");
+  }
+
+  //Generate Tokens
+  const { accessToken, refreshToken } = await generateAccessAndRefreshToken(
+    user._id
+  );
+
+  const loggedInUser = await User.findById(user._id).select(
+    "-password -refreshToken"
+  );
+
+  if (!loggedInUser) {
+    throw new ApiError(500, "Couldn't find logged in user");
+  }
+
+  return res
+    .status(200)
+    .cookie("accessToken", accessToken, httpOptions)
+    .cookie("refreshToken", refreshToken, httpOptions)
+    .json(
+      new ApiResponse(
+        200,
+        {
+          loggedInUser,
+          accessToken,
+          refreshToken,
+        },
+        "User logged in successfully"
+      )
+    );
+});
+
+const logoutUser = asyncHandler(async (req, res) => {
+  await User.findByIdAndUpdate(
+    req.user._id,
+    {
+      $set: {
+        refreshToken: undefined,
+      },
+    },
+    { new: true }
+  );
+
+  return res
+    .status(200)
+    .clearCookie("accessToken", httpOptions)
+    .clearCookie("refreshToken", httpOptions)
+    .json(new ApiResponse(200, {}, "user logged out successfully "));
+});
+
+const refreshAccessToken = asyncHandler(async (req, res) => {
+  const incomingRefreshToken =
+    req.cookies.refreshToken || req.body.refreshToken;
+
+  if (!incomingRefreshToken) {
+    throw new ApiError(401, "Refresh token is required");
+  }
+
+  try {
+    //decoding to get _id form token
+    const decodedToken = jwt.verify(
+      incomingRefreshToken,
+      process.env.REFRESH_TOKEN_SECRET,
+      {
+        expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
+      }
+    );
+
+    // Validation
+    const user = await User.findById(decodedToken?._id); // taking _id from decoded token
+    if (!user) {
+      throw new ApiError(401, "Invalid refresh token");
+    }
+    if (incomingRefreshToken !== user?.refreshToken) {
+      throw new ApiError(401, "Invalid refresh token");
+    }
+
+    //Generating new token
+
+    const { accessToken, refreshToken: newRefreshToken } =
+      await generateAccessAndRefreshToken(user._id);
+
+    return res
+      .status(200)
+      .cookie("accessToken", accessToken, httpOptions)
+      .cookie("refreshToken", newRefreshToken, httpOptions)
+      .json(
+        new ApiResponse(
+          200,
+          {
+            accessToken,
+            refreshToken: newRefreshToken,
+          },
+          "Access token refreshed successfully"
+        )
+      );
+  } catch (error) {
+    throw new ApiError(
+      500,
+      "Something went wrong while refreshing access token"
+    );
+  }
+});
+
+export { registerUser, loginUser, refreshAccessToken, logoutUser };
